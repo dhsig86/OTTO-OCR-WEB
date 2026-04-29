@@ -38,6 +38,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('');
   const [copied, setCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [selectedExamType, setSelectedExamType] = useState('auto');
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -85,11 +86,12 @@ export default function App() {
           const findings = normalizeFindings(ci.findings);
           const diagnostic = normalizeFindings(ci.diagnostics);
           const examDate = data.result?.exam_date || '';
+          const succinctInsight = typeof ci.succinct_insight === 'string' ? ci.succinct_insight.trim() : '';
           
           if (!summary && findings.length === 0) {
             setErrorMessage('Arquivo processado, mas dados estruturados vazios.');
           } else {
-            setOcrResult({ summary, findings, examDate, diagnostic });
+            setOcrResult({ summary, findings, examDate, diagnostic, succinctInsight });
             showToast('Extração finalizada com sucesso!');
           }
         } else if (data.status === 'low_confidence') {
@@ -143,7 +145,7 @@ export default function App() {
       
       const body = new FormData();
       body.append('file', file);
-      body.append('exam_type', 'auto'); // Auto mode
+      body.append('exam_type', selectedExamType);
 
       const response = await fetch(`${OCR_BASE_URL}/ocr/upload`, {
         method: 'POST',
@@ -183,7 +185,23 @@ export default function App() {
     if (navigator.clipboard && window.isSecureContext) {
       navigator.clipboard.writeText(text).then(() => {
         setCopied(true);
-        showToast('Texto copiado para a prancheta!');
+        showToast('Texto integral copiado!');
+        setTimeout(() => setCopied(false), 2500);
+      }).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  };
+
+  const handleCopySuccinct = () => {
+    if (!hasResult) return;
+    const dateStr = ocrResult.examDate ? `${ocrResult.examDate} - ` : '';
+    let text = `${dateStr}${ocrResult.succinctInsight || ocrResult.summary || ''}`;
+    
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => {
+        setCopied(true);
+        showToast('Resumo Prontuário copiado!');
         setTimeout(() => setCopied(false), 2500);
       }).catch(() => fallbackCopy(text));
     } else {
@@ -226,10 +244,36 @@ export default function App() {
       {/* Main Content */}
       <main className="mx-auto w-full max-w-3xl p-4 md:p-6 mt-4 space-y-5">
         
-        {/* Helper Banner */}
+        {/* Helper Banner & Tutorial */}
         <div className="text-center px-4 mb-6">
           <h2 className="text-xl md:text-2xl font-bold text-slate-800 tracking-tight mb-2">Visão Computacional Clínica</h2>
-          <p className="text-sm md:text-base text-slate-500">Envie um laudo escaneado ou PDF nativo para transformá-lo estruturalmente em insights médicos via agentes OTTO.</p>
+          <p className="text-sm md:text-base text-slate-500 mb-4">Envie um laudo escaneado ou PDF nativo para transformá-lo estruturalmente em insights médicos via agentes OTTO.</p>
+          
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 text-left text-sm text-slate-600 shadow-sm max-w-2xl mx-auto mb-6">
+            <p className="font-semibold text-slate-800 mb-2 flex items-center gap-2">💡 Dicas para Scans Perfeitos:</p>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>Evite reflexos de luz em exames impressos.</li>
+              <li>A detecção de tipo é automática, mas em caso de falha, você pode forçar o modelo de exame abaixo.</li>
+              <li>Epônimos serão mantidos, mas idiomas estrangeiros no visor do aparelho serão traduzidos para o Português.</li>
+            </ul>
+          </div>
+          
+          <div className="max-w-xs mx-auto">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 text-left">Forçar Tipo de Exame</label>
+            <select 
+              value={selectedExamType} 
+              onChange={(e) => setSelectedExamType(e.target.value)}
+              className="w-full bg-white border border-slate-300 text-slate-700 text-sm rounded-xl focus:ring-teal-500 focus:border-teal-500 block p-2.5 shadow-sm"
+            >
+              <option value="auto">Detecção Automática (Recomendado)</option>
+              <option value="tomografia">Tomografia de Face</option>
+              <option value="endoscopia_nasal">Videoendoscopia Nasal</option>
+              <option value="videolaringoscopia">Videolaringoscopia</option>
+              <option value="audiometria">Audiometria</option>
+              <option value="bera">BERA / PEATE</option>
+              <option value="polissonografia">Polissonografia</option>
+            </select>
+          </div>
         </div>
 
         {/* Upload Zone */}
@@ -360,18 +404,32 @@ export default function App() {
 
               {/* Action Footer */}
               <div className="bg-slate-50 border-t border-slate-200 p-4 md:p-5 flex flex-col md:flex-row items-center gap-3 justify-between">
-                 <p className="text-xs text-slate-500 max-w-sm text-center md:text-left">Use essa transcrição para compor a história clínica do painel.</p>
-                 <button
-                  onClick={handleCopy}
-                  className={`w-full md:w-auto flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold shadow-sm transition-all text-sm active:scale-95 ${
-                    copied 
-                      ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300' 
-                      : 'bg-teal-600 text-white hover:bg-teal-700 shadow-teal-500/20 hover:shadow-teal-500/30'
-                  }`}
-                 >
-                   {copied ? <ClipboardCheck size={18}/> : <Copy size={18}/>}
-                   {copied ? 'Copiado para área de transf.' : 'Copiar Extração Segura'}
-                 </button>
+                 <p className="text-xs text-slate-500 max-w-xs text-center md:text-left">Use essa transcrição para compor a história clínica do painel.</p>
+                 
+                 <div className="flex flex-col sm:flex-row w-full md:w-auto gap-2">
+                   <button
+                    onClick={handleCopy}
+                    className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold shadow-sm transition-all text-sm active:scale-95 ${
+                      copied 
+                        ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300' 
+                        : 'bg-white text-teal-700 border border-teal-200 hover:bg-teal-50'
+                    }`}
+                   >
+                     {copied ? <ClipboardCheck size={18}/> : <FileText size={18}/>}
+                     Cópia Integral
+                   </button>
+                   <button
+                    onClick={handleCopySuccinct}
+                    className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold shadow-sm transition-all text-sm active:scale-95 ${
+                      copied 
+                        ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300' 
+                        : 'bg-teal-600 text-white hover:bg-teal-700 shadow-teal-500/20 hover:shadow-teal-500/30'
+                    }`}
+                   >
+                     {copied ? <ClipboardCheck size={18}/> : <Copy size={18}/>}
+                     Resumo (Prontuário)
+                   </button>
+                 </div>
               </div>
 
             </div>
