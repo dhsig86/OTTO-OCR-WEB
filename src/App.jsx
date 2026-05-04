@@ -28,7 +28,26 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [selectedFileName, setSelectedFileName] = useState('');
   const [examType, setExamType] = useState('auto');
-  
+  const [doctorName, setDoctorName] = useState('');
+
+  // Warm-up: acorda o Render no momento que o app carrega (evita cold start no upload)
+  useEffect(() => {
+    fetch(`${OCR_BASE_URL}/health`, { signal: AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined })
+      .catch(() => {});
+  }, []);
+
+  // Recebe contexto do OTTO PWA via postMessage (quando aberto no ModuleFrame)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === 'otto-context' || e.data?.type === 'OTTO_CONTEXT') {
+        const p = e.data.payload ?? e.data;
+        if (p?.userName && !doctorName) setDoctorName(p.userName);
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [doctorName]);
+
   const [ocrResult, setOcrResultState] = useState(() => {
     try {
       const raw = sessionStorage.getItem(OCR_SESSION_KEY);
@@ -40,6 +59,10 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [selectedExamType, setSelectedExamType] = useState('auto');
+  const [currentJobId, setCurrentJobId] = useState(null);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+  const [showCorrectionField, setShowCorrectionField] = useState(false);
+  const [correctionText, setCorrectionText] = useState('');
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -164,6 +187,10 @@ export default function App() {
       if (!json.job_id) throw new Error('Job ID não retornado pelo servidor.');
 
       setStatusMessage('Iniciando orquestração inteligente...');
+      setCurrentJobId(json.job_id);
+      setFeedbackSent(false);
+      setCorrectionText('');
+      setShowCorrectionField(false);
       pollResult(json.job_id);
     } catch (e) {
       setIsLoading(false);
@@ -207,6 +234,19 @@ export default function App() {
     } else {
       fallbackCopy(text, 'Copiado!');
     }
+  };
+
+  const sendFeedback = async (isCorrect) => {
+    if (!currentJobId || feedbackSent) return;
+    try {
+      await fetch(`${OCR_BASE_URL}/ocr/${currentJobId}/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_correct: isCorrect, corrections: correctionText.trim() || null }),
+      });
+    } catch {}
+    setFeedbackSent(true);
+    showToast(isCorrect ? '✅ Validação enviada — obrigado!' : '📝 Correção registrada para retreinamento!');
   };
 
   const fallbackCopy = (text, toastMsg) => {
@@ -261,12 +301,28 @@ export default function App() {
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-700 font-medium focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none transition-all cursor-pointer"
             >
               <option value="auto">Auto-Detectar (Recomendado)</option>
-              <option value="tomografia">Tomografia de Face</option>
-              <option value="endoscopia_nasal">Videoendoscopia Nasal</option>
-              <option value="audiometria">Audiometria</option>
-              <option value="videolaringoscopia">Videolaringoscopia / Nasofibro</option>
-              <option value="bera">BERA / PEATE</option>
-              <option value="polissonografia">Polissonografia</option>
+              <optgroup label="Otologia">
+                <option value="audiometria">Audiometria Tonal / Vocal</option>
+                <option value="bera">BERA / PEATE</option>
+                <option value="imitanciometria">Imitanciometria / Timpanometria</option>
+                <option value="vnge">VNG / Vectoeletronistagmografia</option>
+              </optgroup>
+              <optgroup label="Rinologia / Seios">
+                <option value="tomografia">Tomografia de Seios Paranasais</option>
+                <option value="ressonancia_nasal">Ressonância Magnética (Face/Seios)</option>
+                <option value="endoscopia_nasal">Videoendoscopia Nasal</option>
+              </optgroup>
+              <optgroup label="Laringologia">
+                <option value="videolaringoscopia">Videolaringoscopia / Nasofibroscopia</option>
+                <option value="videostroboscopia">Videoestroboscopia</option>
+              </optgroup>
+              <optgroup label="Sono">
+                <option value="polissonografia">Polissonografia</option>
+              </optgroup>
+              <optgroup label="Cabeça e Pescoço">
+                <option value="tc_pescoco">Tomografia de Pescoço</option>
+                <option value="ressonancia_pescoco">Ressonância Magnética (Pescoço)</option>
+              </optgroup>
             </select>
           </div>
 
@@ -424,8 +480,8 @@ export default function App() {
                    <button
                     onClick={handleCopySuccinct}
                     className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold shadow-sm transition-all text-sm active:scale-95 ${
-                      copied 
-                        ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300' 
+                      copied
+                        ? 'bg-emerald-100 text-emerald-800 ring-1 ring-emerald-300'
                         : 'bg-teal-600 text-white hover:bg-teal-700 shadow-teal-500/20 hover:shadow-teal-500/30'
                     }`}
                    >
@@ -436,6 +492,52 @@ export default function App() {
               </div>
 
             </div>
+
+            {/* Validação ML — Feedback para retreinamento */}
+            {!feedbackSent ? (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                  🧠 Validação Clínica — Melhora a IA
+                </p>
+                <p className="text-sm text-slate-600 mb-4">A extração ficou precisa e completa?</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => sendFeedback(true)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all"
+                  >
+                    👍 Sim, está correto
+                  </button>
+                  <button
+                    onClick={() => setShowCorrectionField(true)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-all"
+                  >
+                    ✏️ Precisa de correção
+                  </button>
+                </div>
+                {showCorrectionField && (
+                  <div className="mt-4 space-y-3">
+                    <textarea
+                      value={correctionText}
+                      onChange={(e) => setCorrectionText(e.target.value)}
+                      placeholder="Descreva o que a IA errou ou deixou de capturar (ex: não identificou perda auditiva em 4kHz, frequência incorreta, diagnóstico trocado...)"
+                      className="w-full p-3 border border-slate-200 rounded-xl text-sm text-slate-700 bg-slate-50 resize-none outline-none focus:ring-2 focus:ring-amber-400 min-h-[90px]"
+                    />
+                    <button
+                      onClick={() => sendFeedback(false)}
+                      disabled={!correctionText.trim()}
+                      className="px-5 py-2.5 rounded-xl font-bold text-sm bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      Enviar Correção para Retreinamento
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-sm font-semibold text-emerald-700 text-center">
+                ✅ Feedback registrado — contribuindo para o aprendizado do OTTO OCR
+              </div>
+            )}
+
           </div>
         )}
       </main>
